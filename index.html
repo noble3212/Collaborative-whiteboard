@@ -5,65 +5,81 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Realtime Collaborative Whiteboard (Ably)</title>
   <style>
-    body {
-      font-family: sans-serif;
-      text-align: center;
+    html, body {
+      height: 100%;
       margin: 0;
       padding: 0;
       background: #fafafa;
+      font-family: sans-serif;
+      overflow: hidden; /* Prevents scrollbars */
     }
-    h1 {
-      margin-top: 20px;
-    }
+
     #toolbar {
-      margin: 10px auto;
       display: flex;
       justify-content: center;
       align-items: center;
       gap: 15px;
-    }
-    canvas {
-      border: 2px solid #000;
       background: #fff;
-      display: block;
-      margin: 10px auto;
+      padding: 10px;
+      border-bottom: 2px solid #000;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      z-index: 10;
+    }
+
+    #canvas {
+      position: absolute;
+      top: 60px; /* Below toolbar */
+      left: 0;
+      width: 100%;
+      height: calc(100% - 60px);
+      background: #fff;
       cursor: crosshair;
-      touch-action: none; /* prevents scrolling while drawing on touch devices */
+      touch-action: none; /* Prevents page scrolling on touch */
     }
   </style>
 </head>
 <body>
-  <h1>Realtime Collaborative Whiteboard</h1>
   <div id="toolbar">
+    <strong>Realtime Whiteboard</strong>
     <label>Color: <input type="color" id="colorPicker" value="#000000" /></label>
     <label>Brush: <input type="range" id="sizePicker" min="1" max="20" value="4" /></label>
     <button id="clearBtn">Clear</button>
   </div>
 
-  <canvas id="canvas" width="800" height="600"></canvas>
+  <canvas id="canvas"></canvas>
 
   <script src="https://cdn.ably.io/lib/ably.min-1.js"></script>
   <script>
-    // 👉 Put your Ably API key here
+    // ✅ Your Ably API key (do not expose publicly in production)
     const ABLY_API_KEY = "9DoYcA.L_yHCw:to2-Air7MUk4uKZoAcm1RAUpGiNlAkqwpJiLLKiRihU";
 
-    // Connect to Ably
+    // --- Ably Setup ---
     const ably = new Ably.Realtime({ key: ABLY_API_KEY });
     const channel = ably.channels.get("whiteboard");
 
-    // Setup canvas
+    // --- Canvas Setup ---
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
 
+    // Fit canvas to window below toolbar
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight - document.getElementById("toolbar").offsetHeight;
+    }
+    window.addEventListener("resize", resizeCanvas);
+    resizeCanvas();
+
     let drawing = false;
-    let lastX = 0;
-    let lastY = 0;
+    let lastX = 0, lastY = 0;
     let color = document.getElementById("colorPicker").value;
     let size = document.getElementById("sizePicker").value;
 
-    // --- Draw line helper ---
+    // --- Drawing Helper ---
     function drawLine(x1, y1, x2, y2, color, size) {
       ctx.strokeStyle = color;
       ctx.lineWidth = size;
@@ -73,30 +89,24 @@
       ctx.stroke();
     }
 
-    // --- Mouse drawing ---
-    function startDraw(e) {
+    // --- Mouse Drawing ---
+    canvas.addEventListener("mousedown", (e) => {
       drawing = true;
       [lastX, lastY] = [e.offsetX, e.offsetY];
-    }
+    });
 
-    function draw(e) {
+    canvas.addEventListener("mousemove", (e) => {
       if (!drawing) return;
       const [x, y] = [e.offsetX, e.offsetY];
       drawLine(lastX, lastY, x, y, color, size);
       channel.publish("stroke", { x1: lastX, y1: lastY, x2: x, y2: y, color, size });
       [lastX, lastY] = [x, y];
-    }
+    });
 
-    function stopDraw() {
-      drawing = false;
-    }
+    canvas.addEventListener("mouseup", () => drawing = false);
+    canvas.addEventListener("mouseleave", () => drawing = false);
 
-    canvas.addEventListener("mousedown", startDraw);
-    canvas.addEventListener("mousemove", draw);
-    canvas.addEventListener("mouseup", stopDraw);
-    canvas.addEventListener("mouseleave", stopDraw);
-
-    // --- Touch drawing (for phones/tablets) ---
+    // --- Touch Drawing (mobile/tablets) ---
     canvas.addEventListener("touchstart", (e) => {
       e.preventDefault();
       const rect = canvas.getBoundingClientRect();
@@ -118,22 +128,22 @@
       [lastX, lastY] = [x, y];
     });
 
-    canvas.addEventListener("touchend", () => (drawing = false));
+    canvas.addEventListener("touchend", () => drawing = false);
 
-    // --- Receive strokes from others ---
+    // --- Receive Remote Strokes ---
     channel.subscribe("stroke", (msg) => {
       const { x1, y1, x2, y2, color, size } = msg.data;
       drawLine(x1, y1, x2, y2, color, size);
     });
 
-    // --- Toolbar controls ---
-    document.getElementById("colorPicker").onchange = (e) => (color = e.target.value);
-    document.getElementById("sizePicker").oninput = (e) => (size = e.target.value);
+    // --- Toolbar Controls ---
+    document.getElementById("colorPicker").addEventListener("change", (e) => color = e.target.value);
+    document.getElementById("sizePicker").addEventListener("input", (e) => size = e.target.value);
 
-    document.getElementById("clearBtn").onclick = () => {
+    document.getElementById("clearBtn").addEventListener("click", () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       channel.publish("clear", {});
-    };
+    });
 
     channel.subscribe("clear", () => ctx.clearRect(0, 0, canvas.width, canvas.height));
   </script>
