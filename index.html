@@ -1,13 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Realtime Collaborative Whiteboard (Ably)</title>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Realtime Whiteboard (Ably)</title>
 <style>
-html, body { height: 100%; margin: 0; padding: 0; background: #fafafa; font-family: sans-serif; overflow: hidden; }
-#toolbar { display:flex; justify-content:center; align-items:center; gap:15px; background:#fff; padding:10px; border-bottom:2px solid #000; position:fixed; top:0; left:0; width:100%; z-index:10; }
-#canvas { position:absolute; top:60px; left:0; width:100%; height:calc(100% - 60px); background:#fff; cursor:crosshair; touch-action:none; }
+html,body{height:100%;margin:0;padding:0;background:#fafafa;font-family:sans-serif;overflow:hidden;}
+#toolbar{display:flex;justify-content:center;align-items:center;gap:15px;background:#fff;padding:10px;border-bottom:2px solid #000;position:fixed;top:0;left:0;width:100%;z-index:10;}
+#canvas{position:absolute;top:60px;left:0;width:100%;height:calc(100% - 60px);background:#fff;cursor:crosshair;touch-action:none;}
 </style>
 </head>
 <body>
@@ -22,45 +22,50 @@ html, body { height: 100%; margin: 0; padding: 0; background: #fafafa; font-fami
 <script>
 const ABLY_API_KEY = "9DoYcA.L_yHCw:to2-Air7MUk4uKZoAcm1RAUpGiNlAkqwpJiLLKiRihU";
 const ably = new Ably.Realtime({ key: ABLY_API_KEY });
-const channel = ably.channels.get("whiteboard");
+const channel = ably.channels.get("whiteboard", { params: { rewind: "10" } }); // last 10 messages
 
-const canvas = document.getElementById("canvas");
-const ctx = canvas.getContext("2d");
-ctx.lineCap = "round"; ctx.lineJoin = "round";
+const canvas=document.getElementById("canvas");
+const ctx=canvas.getContext("2d");
+ctx.lineCap="round"; ctx.lineJoin="round";
 
-function resizeCanvas() { canvas.width = window.innerWidth; canvas.height = window.innerHeight - document.getElementById("toolbar").offsetHeight; }
-window.addEventListener("resize", resizeCanvas);
-resizeCanvas();
+function resizeCanvas(){ canvas.width=window.innerWidth; canvas.height=window.innerHeight-60; }
+window.addEventListener("resize",resizeCanvas); resizeCanvas();
 
 let drawing=false, lastX=0, lastY=0;
 let color=document.getElementById("colorPicker").value;
 let size=document.getElementById("sizePicker").value;
 
+// Draw a line
 function drawLine(x1,y1,x2,y2,color,size){
   ctx.strokeStyle=color; ctx.lineWidth=size; ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
 }
 
+// Send strokes with interpolation
 function sendStroke(x1,y1,x2,y2){
-  // send raw coordinates
-  channel.publish("stroke",{x1,y1,x2,y2,color,size});
+  const dx=x2-x1, dy=y2-y1;
+  const dist=Math.hypot(dx,dy);
+  const steps=Math.max(Math.ceil(dist/2),1);
+  for(let i=0;i<steps;i++){
+    const sx1=x1 + dx*i/steps, sy1=y1 + dy*i/steps;
+    const sx2=x1 + dx*(i+1)/steps, sy2=y1 + dy*(i+1)/steps;
+    channel.publish("stroke",{x1:sx1,y1:sy1,x2:sx2,y2:sy2,color,size});
+  }
 }
 
-canvas.addEventListener("mousedown",(e)=>{
-  drawing=true; lastX=e.offsetX; lastY=e.offsetY;
-});
+// Mouse
+canvas.addEventListener("mousedown",(e)=>{ drawing=true; lastX=e.offsetX; lastY=e.offsetY; });
 canvas.addEventListener("mousemove",(e)=>{
   if(!drawing) return;
-  const x=e.offsetX, y=e.offsetY;
-  drawLine(lastX,lastY,x,y,color,size);
-  sendStroke(lastX,lastY,x,y);
-  lastX=x; lastY=y;
+  drawLine(lastX,lastY,e.offsetX,e.offsetY,color,size);
+  sendStroke(lastX,lastY,e.offsetX,e.offsetY);
+  lastX=e.offsetX; lastY=e.offsetY;
 });
-canvas.addEventListener("mouseup",(e)=>{ drawing=false; });
+canvas.addEventListener("mouseup",()=>drawing=false);
 canvas.addEventListener("mouseleave",()=>drawing=false);
 
+// Touch
 canvas.addEventListener("touchstart",(e)=>{
-  e.preventDefault();
-  const rect=canvas.getBoundingClientRect();
+  e.preventDefault(); const rect=canvas.getBoundingClientRect();
   const touch=e.touches[0];
   drawing=true; lastX=touch.clientX-rect.left; lastY=touch.clientY-rect.top;
 });
@@ -68,23 +73,21 @@ canvas.addEventListener("touchmove",(e)=>{
   e.preventDefault(); if(!drawing) return;
   const rect=canvas.getBoundingClientRect();
   const touch=e.touches[0];
-  const x=touch.clientX-rect.left, y=touch.clientY-rect.top;
-  drawLine(lastX,lastY,x,y,color,size);
-  sendStroke(lastX,lastY,x,y);
-  lastX=x; lastY=y;
+  drawLine(lastX,lastY,touch.clientX-rect.left,touch.clientY-rect.top,color,size);
+  sendStroke(lastX,lastY,touch.clientX-rect.left,touch.clientY-rect.top);
+  lastX=touch.clientX-rect.left; lastY=touch.clientY-rect.top;
 });
-canvas.addEventListener("touchend",(e)=>{
-  drawing=false;
-});
+canvas.addEventListener("touchend",()=>drawing=false);
 
+// Subscribe
 channel.subscribe("stroke",(msg)=>{
   const {x1,y1,x2,y2,color,size}=msg.data;
   drawLine(x1,y1,x2,y2,color,size);
 });
 
-document.getElementById("colorPicker").addEventListener("change",(e)=>color=e.target.value);
-document.getElementById("sizePicker").addEventListener("input",(e)=>size=e.target.value);
-
+// Toolbar
+document.getElementById("colorPicker").addEventListener("change",e=>color=e.target.value);
+document.getElementById("sizePicker").addEventListener("input",e=>size=e.target.value);
 document.getElementById("clearBtn").addEventListener("click",()=>{
   ctx.clearRect(0,0,canvas.width,canvas.height);
   channel.publish("clear",{});
