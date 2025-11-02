@@ -1,0 +1,104 @@
+// ==========================================
+// 🔧 Replace with your Ably API key
+// ==========================================
+const ABLY_API_KEY = "9DoYcA.L_yHCw:to2-Air7MUk4uKZoAcm1RAUpGiNlAkqwpJiLLKiRihU";
+
+// ------------------------------------------
+// Ably Setup
+// ------------------------------------------
+const ably = new Ably.Realtime({ key: ABLY_API_KEY });
+const channel = ably.channels.get("whiteboard");
+
+// ------------------------------------------
+// Canvas Setup
+// ------------------------------------------
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+
+ctx.lineCap = "round";
+
+let isDrawing = false;
+let lastX = 0;
+let lastY = 0;
+let color = document.getElementById("colorPicker").value;
+let lineWidth = document.getElementById("sizePicker").value;
+
+// ------------------------------------------
+// Drawing Events
+// ------------------------------------------
+function startDrawing(e) {
+  isDrawing = true;
+  [lastX, lastY] = [e.offsetX, e.offsetY];
+}
+
+function draw(e) {
+  if (!isDrawing) return;
+  const x = e.offsetX;
+  const y = e.offsetY;
+
+  // Draw locally
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lineWidth;
+  ctx.beginPath();
+  ctx.moveTo(lastX, lastY);
+  ctx.lineTo(x, y);
+  ctx.stroke();
+
+  // Broadcast stroke to other clients
+  channel.publish("stroke", {
+    x1: lastX,
+    y1: lastY,
+    x2: x,
+    y2: y,
+    color,
+    width: lineWidth,
+  });
+
+  [lastX, lastY] = [x, y];
+}
+
+function stopDrawing() {
+  isDrawing = false;
+}
+
+// ------------------------------------------
+// Listeners for local drawing
+// ------------------------------------------
+canvas.addEventListener("mousedown", startDrawing);
+canvas.addEventListener("mousemove", draw);
+canvas.addEventListener("mouseup", stopDrawing);
+canvas.addEventListener("mouseleave", stopDrawing);
+
+// ------------------------------------------
+// Handle incoming strokes
+// ------------------------------------------
+channel.subscribe("stroke", (msg) => {
+  const { x1, y1, x2, y2, color, width } = msg.data;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+});
+
+// ------------------------------------------
+// Toolbar interactions
+// ------------------------------------------
+document.getElementById("colorPicker").addEventListener("change", (e) => {
+  color = e.target.value;
+});
+
+document.getElementById("sizePicker").addEventListener("input", (e) => {
+  lineWidth = e.target.value;
+});
+
+document.getElementById("clearBtn").addEventListener("click", () => {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  channel.publish("clear", {}); // tell others
+});
+
+// Listen for clears from other clients
+channel.subscribe("clear", () => {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+});
