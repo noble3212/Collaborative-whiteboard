@@ -53,12 +53,13 @@
 
   <script src="https://cdn.ably.io/lib/ably.min-1.js"></script>
   <script>
-    // ✅ Your Ably API key (replace for production security)
     const ABLY_API_KEY = "9DoYcA.L_yHCw:to2-Air7MUk4uKZoAcm1RAUpGiNlAkqwpJiLLKiRihU";
 
     // --- Ably Setup ---
     const ably = new Ably.Realtime({ key: ABLY_API_KEY });
     const channel = ably.channels.get("whiteboard");
+
+    ably.connection.on('connected', () => console.log("Ably connected!"));
 
     // --- Canvas Setup ---
     const canvas = document.getElementById("canvas");
@@ -88,85 +89,87 @@
       ctx.stroke();
     }
 
-    // --- Publish strokes with interpolation ---
+    // --- Publish strokes ---
     function sendStroke(x1, y1, x2, y2) {
-      const dx = x2 - x1;
-      const dy = y2 - y1;
-      const dist = Math.hypot(dx, dy);
-      const steps = Math.max(Math.ceil(dist / 1), 1); // always at least 1 step
+      const rect = canvas.getBoundingClientRect();
+      channel.publish("stroke", {
+        x1: x1 / rect.width,
+        y1: y1 / rect.height,
+        x2: x2 / rect.width,
+        y2: y2 / rect.height,
+        color,
+        size
+      });
+    }
 
-      for (let i = 0; i < steps; i++) {
-        const sx1 = x1 + (dx * i) / steps;
-        const sy1 = y1 + (dy * i) / steps;
-        const sx2 = x1 + (dx * (i + 1)) / steps;
-        const sy2 = y1 + (dy * (i + 1)) / steps;
-
-        channel.publish("stroke", {
-          x1: sx1 / canvas.width,
-          y1: sy1 / canvas.height,
-          x2: sx2 / canvas.width,
-          y2: sy2 / canvas.height,
-          color,
-          size
-        });
+    // --- Get mouse/touch position relative to canvas ---
+    function getPos(e) {
+      const rect = canvas.getBoundingClientRect();
+      if (e.touches) {
+        return {
+          x: e.touches[0].clientX - rect.left,
+          y: e.touches[0].clientY - rect.top
+        };
+      } else {
+        return {
+          x: e.clientX - rect.left,
+          y: e.clientY - rect.top
+        };
       }
     }
 
-    // --- Mouse Drawing ---
-    canvas.addEventListener("mousedown", (e) => {
+    // --- Start drawing ---
+    function startDraw(e) {
+      e.preventDefault();
       drawing = true;
-      [lastX, lastY] = [e.offsetX, e.offsetY];
-    });
+      const pos = getPos(e);
+      lastX = pos.x;
+      lastY = pos.y;
+    }
 
-    canvas.addEventListener("mousemove", (e) => {
+    // --- Draw ---
+    function draw(e) {
+      e.preventDefault();
       if (!drawing) return;
-      const [x, y] = [e.offsetX, e.offsetY];
-      drawLine(lastX, lastY, x, y, color, size);
-      sendStroke(lastX, lastY, x, y);
-      [lastX, lastY] = [x, y];
-    });
+      const pos = getPos(e);
+      drawLine(lastX, lastY, pos.x, pos.y, color, size);
+      sendStroke(lastX, lastY, pos.x, pos.y);
+      lastX = pos.x;
+      lastY = pos.y;
+    }
 
-    canvas.addEventListener("mouseup", (e) => {
-      if (drawing) sendStroke(lastX, lastY, e.offsetX, e.offsetY);
+    // --- Stop drawing ---
+    function stopDraw(e) {
+      if (!drawing) return;
+      const pos = getPos(e);
+      sendStroke(lastX, lastY, pos.x, pos.y);
       drawing = false;
-    });
+    }
+
+    // --- Mouse Events ---
+    canvas.addEventListener("mousedown", startDraw);
+    canvas.addEventListener("mousemove", draw);
+    canvas.addEventListener("mouseup", stopDraw);
     canvas.addEventListener("mouseleave", () => drawing = false);
 
-    // --- Touch Drawing ---
-    canvas.addEventListener("touchstart", (e) => {
-      e.preventDefault();
-      const rect = canvas.getBoundingClientRect();
-      const touch = e.touches[0];
-      drawing = true;
-      lastX = touch.clientX - rect.left;
-      lastY = touch.clientY - rect.top;
-    });
-
-    canvas.addEventListener("touchmove", (e) => {
-      e.preventDefault();
-      if (!drawing) return;
-      const rect = canvas.getBoundingClientRect();
-      const touch = e.touches[0];
-      const x = touch.clientX - rect.left;
-      const y = touch.clientY - rect.top;
-      drawLine(lastX, lastY, x, y, color, size);
-      sendStroke(lastX, lastY, x, y);
-      [lastX, lastY] = [x, y];
-    });
-
-    canvas.addEventListener("touchend", (e) => {
-      if (drawing && e.changedTouches[0]) {
-        const rect = canvas.getBoundingClientRect();
-        const touch = e.changedTouches[0];
-        sendStroke(lastX, lastY, touch.clientX - rect.left, touch.clientY - rect.top);
-      }
-      drawing = false;
-    });
+    // --- Touch Events ---
+    canvas.addEventListener("touchstart", startDraw);
+    canvas.addEventListener("touchmove", draw);
+    canvas.addEventListener("touchend", stopDraw);
+    canvas.addEventListener("touchcancel", () => drawing = false);
 
     // --- Receive Remote Strokes ---
     channel.subscribe("stroke", (msg) => {
+      if (msg.clientId === ably.clientId) return; // skip own strokes
       const { x1, y1, x2, y2, color, size } = msg.data;
-      drawLine(x1 * canvas.width, y1 * canvas.height, x2 * canvas.width, y2 * canvas.height, color, size);
+      drawLine(
+        x1 * canvas.width,
+        y1 * canvas.height,
+        x2 * canvas.width,
+        y2 * canvas.height,
+        color,
+        size
+      );
     });
 
     // --- Toolbar Controls ---
