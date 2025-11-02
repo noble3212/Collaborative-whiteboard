@@ -53,7 +53,7 @@
 
   <script src="https://cdn.ably.io/lib/ably.min-1.js"></script>
   <script>
-    // ✅ Your Ably API key
+    // ✅ Your Ably API key (replace for production security)
     const ABLY_API_KEY = "9DoYcA.L_yHCw:to2-Air7MUk4uKZoAcm1RAUpGiNlAkqwpJiLLKiRihU";
 
     // --- Ably Setup ---
@@ -66,7 +66,6 @@
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
 
-    // Fit canvas to window
     function resizeCanvas() {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight - document.getElementById("toolbar").offsetHeight;
@@ -89,12 +88,12 @@
       ctx.stroke();
     }
 
-    // --- Publish strokes with guaranteed interpolation ---
+    // --- Publish strokes with interpolation ---
     function sendStroke(x1, y1, x2, y2) {
       const dx = x2 - x1;
       const dy = y2 - y1;
       const dist = Math.hypot(dx, dy);
-      const steps = Math.max(Math.ceil(dist / 2), 1); // at least 1 step
+      const steps = Math.max(Math.ceil(dist / 1), 1); // always at least 1 step
 
       for (let i = 0; i < steps; i++) {
         const sx1 = x1 + (dx * i) / steps;
@@ -127,7 +126,10 @@
       [lastX, lastY] = [x, y];
     });
 
-    canvas.addEventListener("mouseup", () => drawing = false);
+    canvas.addEventListener("mouseup", (e) => {
+      if (drawing) sendStroke(lastX, lastY, e.offsetX, e.offsetY);
+      drawing = false;
+    });
     canvas.addEventListener("mouseleave", () => drawing = false);
 
     // --- Touch Drawing ---
@@ -152,38 +154,31 @@
       [lastX, lastY] = [x, y];
     });
 
-    canvas.addEventListener("touchend", () => drawing = false);
+    canvas.addEventListener("touchend", (e) => {
+      if (drawing && e.changedTouches[0]) {
+        const rect = canvas.getBoundingClientRect();
+        const touch = e.changedTouches[0];
+        sendStroke(lastX, lastY, touch.clientX - rect.left, touch.clientY - rect.top);
+      }
+      drawing = false;
+    });
 
     // --- Receive Remote Strokes ---
     channel.subscribe("stroke", (msg) => {
       const { x1, y1, x2, y2, color, size } = msg.data;
-      drawLine(
-        x1 * canvas.width,
-        y1 * canvas.height,
-        x2 * canvas.width,
-        y2 * canvas.height,
-        color,
-        size
-      );
+      drawLine(x1 * canvas.width, y1 * canvas.height, x2 * canvas.width, y2 * canvas.height, color, size);
     });
 
     // --- Toolbar Controls ---
-    document.getElementById("colorPicker").addEventListener("change", (e) => {
-      color = e.target.value;
-    });
-
-    document.getElementById("sizePicker").addEventListener("input", (e) => {
-      size = e.target.value;
-    });
+    document.getElementById("colorPicker").addEventListener("change", (e) => color = e.target.value);
+    document.getElementById("sizePicker").addEventListener("input", (e) => size = e.target.value);
 
     document.getElementById("clearBtn").addEventListener("click", () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       channel.publish("clear", {});
     });
 
-    channel.subscribe("clear", () => {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-    });
+    channel.subscribe("clear", () => ctx.clearRect(0, 0, canvas.width, canvas.height));
   </script>
 </body>
 </html>
