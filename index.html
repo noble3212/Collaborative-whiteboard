@@ -19,11 +19,17 @@ html, body {height:100%;margin:0;padding:0;background:#fafafa;font-family:sans-s
 </div>
 
 <canvas id="canvas"></canvas>
-<script src="https://cdn.ably.io/lib/ably.min-1.js"></script>
+<script src="https://cdn.ably.io/lib/ably.min-1.2.4.js"></script> 
 <script>
 const ABLY_API_KEY = "9DoYcA.L_yHCw:to2-Air7MUk4uKZoAcm1RAUpGiNlAkqwpJiLLKiRihU";
 const ably = new Ably.Realtime({ key: ABLY_API_KEY });
-const channel = ably.channels.get("whiteboard");
+
+// Using separate channels for better management of history/rewind
+// The 'stroke' channel needs sequencing for order and rewind for missed strokes
+const strokeChannel = ably.channels.get("whiteboard:strokes", { params: { rewind: "100", sequenced: "true" } }); 
+// The 'clear' channel only needs to rewind the last message to catch new clients up
+const clearChannel = ably.channels.get("whiteboard:clear", { params: { rewind: "1" } }); 
+
 
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
@@ -31,8 +37,9 @@ ctx.lineCap = "round";
 ctx.lineJoin = "round";
 
 function resizeCanvas(){
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight - document.getElementById("toolbar").offsetHeight;
+    canvas.width = window.innerWidth;
+    // Calculate height dynamically from the toolbar height for accurate canvas sizing
+    canvas.height = window.innerHeight - document.getElementById("toolbar").offsetHeight; 
 }
 window.addEventListener("resize", resizeCanvas);
 resizeCanvas();
@@ -43,88 +50,82 @@ let color = document.getElementById("colorPicker").value;
 let size = document.getElementById("sizePicker").value;
 
 function drawLine(x1,y1,x2,y2,color,size){
-    ctx.strokeStyle=color;
-    ctx.lineWidth=size;
-    ctx.beginPath();
-    ctx.moveTo(x1,y1);
-    ctx.lineTo(x2,y2);
-    ctx.stroke();
+    ctx.strokeStyle=color;
+    ctx.lineWidth=size;
+    ctx.beginPath();
+    ctx.moveTo(x1,y1);
+    ctx.lineTo(x2,y2);
+    ctx.stroke();
 }
 
-// ✅ New robust stroke sender
+// 🚀 FIXED: Removed the message-spamming interpolation loop.
+// We send a single message for the segment drawn in the move event.
 function sendStroke(x1,y1,x2,y2){
-    const dx = x2 - x1, dy = y2 - y1;
-    const dist = Math.hypot(dx,dy);
-    const steps = Math.max(Math.ceil(dist / 2), 1); // always at least 1 step
-
-    for(let i=0;i<steps;i++){
-        const sx1 = x1 + dx*i/steps;
-        const sy1 = y1 + dy*i/steps;
-        const sx2 = x1 + dx*(i+1)/steps;
-        const sy2 = y1 + dy*(i+1)/steps;
-
-        channel.publish("stroke",{
-            x1: sx1/canvas.width,
-            y1: sy1/canvas.height,
-            x2: sx2/canvas.width,
-            y2: sy2/canvas.height,
-            color,
-            size
-        });
-    }
+    // Publish normalized coordinates (0 to 1) for screen size independence
+    strokeChannel.publish("stroke",{
+        x1: x1 / canvas.width,
+        y1: y1 / canvas.height,
+        x2: x2 / canvas.width,
+        y2: y2 / canvas.height,
+        color,
+        size
+    });
 }
 
 // --- Mouse ---
 canvas.addEventListener("mousedown",(e)=>{drawing=true;[lastX,lastY]=[e.offsetX,e.offsetY];});
 canvas.addEventListener("mousemove",(e)=>{
-    if(!drawing) return;
-    const [x,y]=[e.offsetX,e.offsetY];
-    drawLine(lastX,lastY,x,y,color,size);
-    sendStroke(lastX,lastY,x,y);
-    [lastX,lastY]=[x,y];
+    if(!drawing) return;
+    const [x,y]=[e.offsetX,e.offsetY];
+    drawLine(lastX,lastY,x,y,color,size);
+    sendStroke(lastX,lastY,x,y);
+    [lastX,lastY]=[x,y];
 });
 canvas.addEventListener("mouseup",()=>drawing=false);
 canvas.addEventListener("mouseleave",()=>drawing=false);
 
 // --- Touch ---
 canvas.addEventListener("touchstart",(e)=>{
-    e.preventDefault();
-    const rect=canvas.getBoundingClientRect();
-    const touch=e.touches[0];
-    drawing=true;
-    lastX = touch.clientX - rect.left;
-    lastY = touch.clientY - rect.top;
+    e.preventDefault();
+    const rect=canvas.getBoundingClientRect();
+    const touch=e.touches[0];
+    drawing=true;
+    lastX = touch.clientX - rect.left;
+    lastY = touch.clientY - rect.top;
 });
 canvas.addEventListener("touchmove",(e)=>{
-    e.preventDefault();
-    if(!drawing) return;
-    const rect=canvas.getBoundingClientRect();
-    const touch=e.touches[0];
-    const x = touch.clientX - rect.left;
-    const y = touch.clientY - rect.top;
-    drawLine(lastX,lastY,x,y,color,size);
-    sendStroke(lastX,lastY,x,y);
-    [lastX,lastY]=[x,y];
+    e.preventDefault();
+    if(!drawing) return;
+    const rect=canvas.getBoundingClientRect();
+    const touch=e.touches[0];
+    const x = touch.clientX - rect.left;
+    const y = touch.clientY - rect.top;
+    drawLine(lastX,lastY,x,y,color,size);
+    sendStroke(lastX,lastY,x,y);
+    [lastX,lastY]=[x,y];
 });
 canvas.addEventListener("touchend",()=>drawing=false);
 
-// --- Receive ---
-channel.subscribe("stroke",(msg)=>{
-    const {x1,y1,x2,y2,color,size}=msg.data;
-    drawLine(x1*canvas.width,y1*canvas.height,x2*canvas.width,y2*canvas.height,color,size);
+// --- Receive Strokes ---
+strokeChannel.subscribe("stroke",(msg)=>{
+    const {x1,y1,x2,y2,color,size}=msg.data;
+    // Denormalize coordinates using current canvas size
+    drawLine(x1*canvas.width,y1*canvas.height,x2*canvas.width,y2*canvas.height,color,size);
 });
 
-// --- Toolbar ---
+// --- Toolbar and Clear ---
 document.getElementById("colorPicker").addEventListener("change",(e)=>color=e.target.value);
 document.getElementById("sizePicker").addEventListener("input",(e)=>size=e.target.value);
 
 document.getElementById("clearBtn").addEventListener("click",()=>{
-    ctx.clearRect(0,0,canvas.width,canvas.height);
-    channel.publish("clear",{});
+    // 1. Clear local canvas
+    ctx.clearRect(0,0,canvas.width,canvas.height); 
+    // 2. Publish to dedicated clear channel
+    clearChannel.publish("clear",{});
 });
 
-channel.subscribe("clear",()=>ctx.clearRect(0,0,canvas.width,canvas.height));
+// 🚀 FIXED: Subscribed to the dedicated clear channel with rewind
+clearChannel.subscribe("clear",()=>ctx.clearRect(0,0,canvas.width,canvas.height));
 </script>
 </body>
 </html>
-
