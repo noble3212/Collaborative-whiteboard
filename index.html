@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Realtime Whiteboard (Ably)</title>
+  <title>Realtime Collaborative Whiteboard (Ably)</title>
   <style>
     body {
       font-family: sans-serif;
@@ -28,6 +28,7 @@
       display: block;
       margin: 10px auto;
       cursor: crosshair;
+      touch-action: none; /* prevents scrolling while drawing on touch devices */
     }
   </style>
 </head>
@@ -44,7 +45,7 @@
   <script src="https://cdn.ably.io/lib/ably.min-1.js"></script>
   <script>
     // 👉 Put your Ably API key here
-    const ABLY_API_KEY = "YOUR_ABLY_API_KEY_HERE";
+    const ABLY_API_KEY = "9DoYcA.L_yHCw:to2-Air7MUk4uKZoAcm1RAUpGiNlAkqwpJiLLKiRihU";
 
     // Connect to Ably
     const ably = new Ably.Realtime({ key: ABLY_API_KEY });
@@ -54,6 +55,7 @@
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
     ctx.lineCap = "round";
+    ctx.lineJoin = "round";
 
     let drawing = false;
     let lastX = 0;
@@ -61,26 +63,7 @@
     let color = document.getElementById("colorPicker").value;
     let size = document.getElementById("sizePicker").value;
 
-    // --- Draw locally and publish to Ably ---
-    function start(e) {
-      drawing = true;
-      [lastX, lastY] = [e.offsetX, e.offsetY];
-    }
-
-    function move(e) {
-      if (!drawing) return;
-      const [x, y] = [e.offsetX, e.offsetY];
-
-      drawLine(lastX, lastY, x, y, color, size);
-      channel.publish("stroke", { x1: lastX, y1: lastY, x2: x, y2: y, color, size });
-
-      [lastX, lastY] = [x, y];
-    }
-
-    function stop() {
-      drawing = false;
-    }
-
+    // --- Draw line helper ---
     function drawLine(x1, y1, x2, y2, color, size) {
       ctx.strokeStyle = color;
       ctx.lineWidth = size;
@@ -90,21 +73,63 @@
       ctx.stroke();
     }
 
-    // Event listeners
-    canvas.addEventListener("mousedown", start);
-    canvas.addEventListener("mousemove", move);
-    canvas.addEventListener("mouseup", stop);
-    canvas.addEventListener("mouseleave", stop);
+    // --- Mouse drawing ---
+    function startDraw(e) {
+      drawing = true;
+      [lastX, lastY] = [e.offsetX, e.offsetY];
+    }
 
-    // --- Listen for other users' strokes ---
+    function draw(e) {
+      if (!drawing) return;
+      const [x, y] = [e.offsetX, e.offsetY];
+      drawLine(lastX, lastY, x, y, color, size);
+      channel.publish("stroke", { x1: lastX, y1: lastY, x2: x, y2: y, color, size });
+      [lastX, lastY] = [x, y];
+    }
+
+    function stopDraw() {
+      drawing = false;
+    }
+
+    canvas.addEventListener("mousedown", startDraw);
+    canvas.addEventListener("mousemove", draw);
+    canvas.addEventListener("mouseup", stopDraw);
+    canvas.addEventListener("mouseleave", stopDraw);
+
+    // --- Touch drawing (for phones/tablets) ---
+    canvas.addEventListener("touchstart", (e) => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const touch = e.touches[0];
+      drawing = true;
+      lastX = touch.clientX - rect.left;
+      lastY = touch.clientY - rect.top;
+    });
+
+    canvas.addEventListener("touchmove", (e) => {
+      e.preventDefault();
+      if (!drawing) return;
+      const rect = canvas.getBoundingClientRect();
+      const touch = e.touches[0];
+      const x = touch.clientX - rect.left;
+      const y = touch.clientY - rect.top;
+      drawLine(lastX, lastY, x, y, color, size);
+      channel.publish("stroke", { x1: lastX, y1: lastY, x2: x, y2: y, color, size });
+      [lastX, lastY] = [x, y];
+    });
+
+    canvas.addEventListener("touchend", () => (drawing = false));
+
+    // --- Receive strokes from others ---
     channel.subscribe("stroke", (msg) => {
       const { x1, y1, x2, y2, color, size } = msg.data;
       drawLine(x1, y1, x2, y2, color, size);
     });
 
-    // --- Tools ---
+    // --- Toolbar controls ---
     document.getElementById("colorPicker").onchange = (e) => (color = e.target.value);
     document.getElementById("sizePicker").oninput = (e) => (size = e.target.value);
+
     document.getElementById("clearBtn").onclick = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       channel.publish("clear", {});
