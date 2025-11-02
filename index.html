@@ -11,7 +11,7 @@
       padding: 0;
       background: #fafafa;
       font-family: sans-serif;
-      overflow: hidden; /* Prevents scrollbars */
+      overflow: hidden;
     }
 
     #toolbar {
@@ -53,7 +53,7 @@
 
   <script src="https://cdn.ably.io/lib/ably.min-1.js"></script>
   <script>
-    // ✅ Your Ably API key (do not expose publicly in production)
+    // ✅ Your Ably API key
     const ABLY_API_KEY = "9DoYcA.L_yHCw:to2-Air7MUk4uKZoAcm1RAUpGiNlAkqwpJiLLKiRihU";
 
     // --- Ably Setup ---
@@ -99,14 +99,21 @@
       if (!drawing) return;
       const [x, y] = [e.offsetX, e.offsetY];
       drawLine(lastX, lastY, x, y, color, size);
-      channel.publish("stroke", { x1: lastX, y1: lastY, x2: x, y2: y, color, size });
+      channel.publish("stroke", {
+        x1: lastX / canvas.width,
+        y1: lastY / canvas.height,
+        x2: x / canvas.width,
+        y2: y / canvas.height,
+        color,
+        size
+      });
       [lastX, lastY] = [x, y];
     });
 
     canvas.addEventListener("mouseup", () => drawing = false);
     canvas.addEventListener("mouseleave", () => drawing = false);
 
-    // --- Touch Drawing (mobile/tablets) ---
+    // --- Touch Drawing ---
     canvas.addEventListener("touchstart", (e) => {
       e.preventDefault();
       const rect = canvas.getBoundingClientRect();
@@ -124,7 +131,14 @@
       const x = touch.clientX - rect.left;
       const y = touch.clientY - rect.top;
       drawLine(lastX, lastY, x, y, color, size);
-      channel.publish("stroke", { x1: lastX, y1: lastY, x2: x, y2: y, color, size });
+      channel.publish("stroke", {
+        x1: lastX / canvas.width,
+        y1: lastY / canvas.height,
+        x2: x / canvas.width,
+        y2: y / canvas.height,
+        color,
+        size
+      });
       [lastX, lastY] = [x, y];
     });
 
@@ -133,7 +147,14 @@
     // --- Receive Remote Strokes ---
     channel.subscribe("stroke", (msg) => {
       const { x1, y1, x2, y2, color, size } = msg.data;
-      drawLine(x1, y1, x2, y2, color, size);
+      drawLine(
+        x1 * canvas.width,
+        y1 * canvas.height,
+        x2 * canvas.width,
+        y2 * canvas.height,
+        color,
+        size
+      );
     });
 
     // --- Toolbar Controls ---
