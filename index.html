@@ -1,149 +1,128 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>Realtime Whiteboard (Ably)</title>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Realtime Collaborative Whiteboard</title>
 <style>
-html,body{height:100%;margin:0;padding:0;background:#fafafa;font-family:sans-serif;overflow:hidden;}
-#toolbar{display:flex;justify-content:center;align-items:center;gap:15px;background:#fff;padding:10px;border-bottom:2px solid #000;position:fixed;top:0;left:0;width:100%;z-index:10;}
-#canvas{position:absolute;top:60px;left:0;width:100%;height:calc(100% - 60px);background:#fff;cursor:crosshair;touch-action:none;}
+html, body {height:100%;margin:0;padding:0;background:#fafafa;font-family:sans-serif;overflow:hidden;}
+#toolbar {display:flex;justify-content:center;align-items:center;gap:15px;background:#fff;padding:10px;border-bottom:2px solid #000;position:fixed;top:0;left:0;width:100%;z-index:10;}
+#canvas {position:absolute;top:60px;left:0;width:100%;height:calc(100% - 60px);background:#fff;cursor:crosshair;touch-action:none;}
 </style>
 </head>
 <body>
 <div id="toolbar">
 <strong>Realtime Whiteboard</strong>
-<label>Color: <input type="color" id="colorPicker" value="#000000"/></label>
-<label>Brush: <input type="range" id="sizePicker" min="1" max="20" value="4"/></label>
+<label>Color: <input type="color" id="colorPicker" value="#000000" /></label>
+<label>Brush: <input type="range" id="sizePicker" min="1" max="20" value="4" /></label>
 <button id="clearBtn">Clear</button>
 </div>
+
 <canvas id="canvas"></canvas>
-<script src="https://cdn.ably.io/lib/ably.min-1.2.4.js"></script>
+<script src="https://cdn.ably.io/lib/ably.min-1.js"></script>
 <script>
 const ABLY_API_KEY = "9DoYcA.L_yHCw:to2-Air7MUk4uKZoAcm1RAUpGiNlAkqwpJiLLKiRihU";
 const ably = new Ably.Realtime({ key: ABLY_API_KEY });
+const channel = ably.channels.get("whiteboard");
 
-// --- FIX 1: Connection Status Monitoring ---
-// This is helpful for diagnosing brief disconnections
-ably.connection.on("disconnected", () => {
-    console.warn("Ably: Connection Disconnected. Reconnecting...");
-    // You could update a status indicator here
-});
-ably.connection.on("connected", () => {
-    console.log("Ably: Connection Established.");
-    // You could hide a status indicator here
-});
-ably.connection.on("failed", (error) => {
-    console.error("Ably: Connection Failed!", error);
-});
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+ctx.lineCap = "round";
+ctx.lineJoin = "round";
 
+function resizeCanvas(){
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight - document.getElementById("toolbar").offsetHeight;
+}
+window.addEventListener("resize", resizeCanvas);
+resizeCanvas();
 
-// --- FIX 2: Sequenced Channel ---
-// Adding 'sequenced: "true"' ensures Ably delivers messages in the correct order, 
-// preventing strokes from jumping or fading due to out-of-order delivery.
-const channel = ably.channels.get("whiteboard", { params: { rewind: "100", sequenced: "true" } }); 
+let drawing = false;
+let lastX=0, lastY=0;
+let color = document.getElementById("colorPicker").value;
+let size = document.getElementById("sizePicker").value;
 
-
-const canvas=document.getElementById("canvas");
-const ctx=canvas.getContext("2d");
-ctx.lineCap="round"; ctx.lineJoin="round";
-
-function resizeCanvas(){ canvas.width=window.innerWidth; canvas.height=window.innerHeight-60; }
-window.addEventListener("resize",resizeCanvas); resizeCanvas();
-
-let drawing=false, lastX=0, lastY=0;
-let color=document.getElementById("colorPicker").value;
-let size=document.getElementById("sizePicker").value;
-
-// Draw a line
 function drawLine(x1,y1,x2,y2,color,size){
-  ctx.strokeStyle=color; ctx.lineWidth=size; ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+    ctx.strokeStyle=color;
+    ctx.lineWidth=size;
+    ctx.beginPath();
+    ctx.moveTo(x1,y1);
+    ctx.lineTo(x2,y2);
+    ctx.stroke();
 }
 
-// Mouse
-canvas.addEventListener("mousedown",(e)=>{ 
-  drawing=true; 
-  lastX=e.offsetX; 
-  lastY=e.offsetY; 
-});
+// ✅ New robust stroke sender
+function sendStroke(x1,y1,x2,y2){
+    const dx = x2 - x1, dy = y2 - y1;
+    const dist = Math.hypot(dx,dy);
+    const steps = Math.max(Math.ceil(dist / 2), 1); // always at least 1 step
 
+    for(let i=0;i<steps;i++){
+        const sx1 = x1 + dx*i/steps;
+        const sy1 = y1 + dy*i/steps;
+        const sx2 = x1 + dx*(i+1)/steps;
+        const sy2 = y1 + dy*(i+1)/steps;
+
+        channel.publish("stroke",{
+            x1: sx1/canvas.width,
+            y1: sy1/canvas.height,
+            x2: sx2/canvas.width,
+            y2: sy2/canvas.height,
+            color,
+            size
+        });
+    }
+}
+
+// --- Mouse ---
+canvas.addEventListener("mousedown",(e)=>{drawing=true;[lastX,lastY]=[e.offsetX,e.offsetY];});
 canvas.addEventListener("mousemove",(e)=>{
-  if(!drawing) return;
-
-  // Draw the segment locally
-  drawLine(lastX,lastY,e.offsetX,e.offsetY,color,size);
-
-  // Publish the single segment over Ably (Fix for excessive messages from previous step)
-  channel.publish("stroke",{
-    x1: lastX,
-    y1: lastY,
-    x2: e.offsetX,
-    y2: e.offsetY,
-    color,
-    size
-  });
-
-  lastX=e.offsetX; 
-  lastY=e.offsetY;
+    if(!drawing) return;
+    const [x,y]=[e.offsetX,e.offsetY];
+    drawLine(lastX,lastY,x,y,color,size);
+    sendStroke(lastX,lastY,x,y);
+    [lastX,lastY]=[x,y];
 });
-
 canvas.addEventListener("mouseup",()=>drawing=false);
 canvas.addEventListener("mouseleave",()=>drawing=false);
 
-
-// Touch
+// --- Touch ---
 canvas.addEventListener("touchstart",(e)=>{
-  e.preventDefault(); 
-  const rect=canvas.getBoundingClientRect();
-  const touch=e.touches[0];
-  drawing=true; 
-  lastX=touch.clientX-rect.left; 
-  lastY=touch.clientY-rect.top;
+    e.preventDefault();
+    const rect=canvas.getBoundingClientRect();
+    const touch=e.touches[0];
+    drawing=true;
+    lastX = touch.clientX - rect.left;
+    lastY = touch.clientY - rect.top;
 });
-
 canvas.addEventListener("touchmove",(e)=>{
-  e.preventDefault(); 
-  if(!drawing) return;
-
-  const rect=canvas.getBoundingClientRect();
-  const touch=e.touches[0];
-  const currentX = touch.clientX-rect.left;
-  const currentY = touch.clientY-rect.top;
-
-  // Draw the segment locally
-  drawLine(lastX,lastY,currentX,currentY,color,size);
-
-  // Publish the single segment over Ably (Fix for excessive messages from previous step)
-  channel.publish("stroke",{
-    x1: lastX,
-    y1: lastY,
-    x2: currentX,
-    y2: currentY,
-    color,
-    size
-  });
-  
-  lastX=currentX; 
-  lastY=currentY;
+    e.preventDefault();
+    if(!drawing) return;
+    const rect=canvas.getBoundingClientRect();
+    const touch=e.touches[0];
+    const x = touch.clientX - rect.left;
+    const y = touch.clientY - rect.top;
+    drawLine(lastX,lastY,x,y,color,size);
+    sendStroke(lastX,lastY,x,y);
+    [lastX,lastY]=[x,y];
 });
-
 canvas.addEventListener("touchend",()=>drawing=false);
 
-
-// Subscription
+// --- Receive ---
 channel.subscribe("stroke",(msg)=>{
-  const {x1,y1,x2,y2,color,size}=msg.data;
-  drawLine(x1,y1,x2,y2,color,size);
+    const {x1,y1,x2,y2,color,size}=msg.data;
+    drawLine(x1*canvas.width,y1*canvas.height,x2*canvas.width,y2*canvas.height,color,size);
 });
 
-// Toolbar
-document.getElementById("colorPicker").addEventListener("change",e=>color=e.target.value);
-document.getElementById("sizePicker").addEventListener("input",e=>size=e.target.value);
+// --- Toolbar ---
+document.getElementById("colorPicker").addEventListener("change",(e)=>color=e.target.value);
+document.getElementById("sizePicker").addEventListener("input",(e)=>size=e.target.value);
 
 document.getElementById("clearBtn").addEventListener("click",()=>{
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-  channel.publish("clear",{});
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    channel.publish("clear",{});
 });
+
 channel.subscribe("clear",()=>ctx.clearRect(0,0,canvas.width,canvas.height));
 </script>
 </body>
